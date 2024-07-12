@@ -2,7 +2,6 @@
   "name": "ts-ipfs-service",
   "version": "1.0.0",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js"
@@ -12,15 +11,12 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@helia/json": "^3.0.4",
-    "@helia/unixfs": "^3.0.6",
     "@pinata/sdk": "^2.1.0",
+    "axios": "^1.7.2",
     "dotenv": "^16.4.5",
     "getenv": "^1.0.0",
     "helia": "^4.2.4",
     "install": "^0.13.0",
-    "ipfs-http-client": "^60.0.1",
-    "npm": "^10.8.1",
-    "typescript": "^5.4.5"
+    "npm": "^10.8.1"
   }
 }

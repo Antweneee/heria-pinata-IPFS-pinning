@@ -1,130 +1,134 @@
-import pinataSDK from '@pinata/sdk';
-import dotenv from 'dotenv';
-import fs from 'fs';
+const pinataSDK = require('@pinata/sdk');
+const fs = require('fs');
+const axios = require('axios');
+const path = require('path');
 
-dotenv.config();
 
 // Retrieve environment variables
 const JWT = process.env.JWT;
+const Anthologia_URL = process.env.Anthologia_URL;
+const Pinata_URL = process.env.Pinata_URL;
+const IPFS_Articles_FileName = process.env.IPFS_Articles_FileName;
+const Anthologia_Api_Key = process.env.Anthologia_Api_Key;
 
+// Pinata sdk
 const pinata = new pinataSDK({ pinataJWTKey: JWT});
 
-async function catFile(cid) {
-    const { createHelia } = await import('helia');
-    const { unixfs } = await import('@helia/unixfs');
+exports.ArticlesScript = async (req, res) => {
+    const folderDestination= './tmp'
+    const fileDestination = IPFS_Articles_FileName
 
-    const helia = await createHelia();
-    const fs = unixfs(helia);
+    async function CreateFileFromArticles() {
+        try {
+            const response = await axios.get(
+                `${Anthologia_URL}/articles`,
+                {
+                    headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': Anthologia_Api_Key
+                    },
+                    withCredentials: true,
+                }
+            )
+    
+            const jsonData = {
+                articles: [],
+            };
+            const articles = response.data
 
-    const decoder = new TextDecoder();
-    let jsonString = '';
+            // console.log(articles)
+            // Loop through the response data and add to jsonData
+            for (const article of articles) {
+                const tmp = {
+                    'id': article.id,
+                    'createdAt': article.createdAt,
+                    'updatedAt': article.updatedAt,
+                    'draft': article.draft,
+                    'title': article.title,
+                    'authordId': article.authorId,
+                    'totalViews': article.viewCounter,
+                    'totalLikes': article.likeCounter,
+                    'topicId': article.topicId,
+                    'cid': article.cid
+                }
+    
+                jsonData.articles.push(tmp);
+            }
+    
+            // Define the output file path
+            const outputPath = path.join(folderDestination, fileDestination);
+    
+            // Write the JSON data to a file
+            fs.writeFileSync(outputPath, JSON.stringify(jsonData, null, 2));
+        } catch (error) {
+            // Handle any errors that occurred during the fetch
+            console.error("Error fetching data:", error);
+        }
+    }
+    
+    async function GetPreviousFileHash() {
+        try {
+            const response = await axios.get(`${Pinata_URL}/data/pinList`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${JWT}`
+                    }
+                }
+            )
+            const datas = response.data
+            const rows = datas.rows
+            
+            for (const row of rows) {
+                if (row.date_unpinned == null && row.metadata.name == fileDestination) {
+                    console.log(row);
+                    return row.ipfs_pin_hash;
+                }
+            }    
+        } catch (err) {
+            console.error(err)
+            return 'not found'
+        }
+    }
+
+    // * In case of listing des articles && listing des topics
+    /*
+    response:
+    {
+        IpfsHash: This is the IPFS multi-hash provided back for your content,
+        PinSize: This is how large (in bytes) the content you just pinned is,
+        Timestamp: This is the timestamp for your content pinning (represented in ISO 8601 format)
+    }
+    */
+    async function AddAndPinFileToIPFS(filePath, fileName) {
+        const readableStreamForFile = fs.createReadStream(filePath);
+        const options = {
+            pinataMetadata: {
+                name: fileName,
+            },
+            pinataOptions: {
+                cidVersion: 0
+            }
+        };
+        const res = await pinata.pinFileToIPFS(readableStreamForFile, options)
+        console.log(res)
+        return res
+    }
+
+    async function DeletePinFromIPFS(hashToUnpin) {
+        const res = await pinata.unpin(hashToUnpin)
+        console.log(res)
+    }
 
     try {
-        for await (const chunk of fs.cat(cid)) {
-            jsonString += decoder.decode(chunk, {
-                stream: true
-            });
+        await CreateFileFromArticles()
+        const previousHash = await GetPreviousFileHash()
+        console.log(previousHash)
+        if (previousHash && previousHash != undefined && previousHash != 'not found') {
+            await DeletePinFromIPFS(previousHash)
         }
-
-        const jsonObject = JSON.parse(jsonString);
-        console.log('Added file contents:', jsonObject);
-    } catch (error) {
-        console.error('Error while fetching file from IPFS:', error);
-    } finally {
-        await helia.stop(); // Properly close the Helia instance
+        await AddAndPinFileToIPFS(`${folderDestination}/${fileDestination}`, fileDestination);
+        res.status(200).send('articles deployed successfully.')
+    } catch (err) {
+        res.status(500).send('fail during articles deployment.')
     }
-}
-
-// * In case of listing des articles && listing des topics
-/*
-response:
-{
-    IpfsHash: This is the IPFS multi-hash provided back for your content,
-    PinSize: This is how large (in bytes) the content you just pinned is,
-    Timestamp: This is the timestamp for your content pinning (represented in ISO 8601 format)
-}
-*/
-async function AddAndPinFileToIPFS(filePath, fileName) {
-    const readableStreamForFile = fs.createReadStream(filePath);
-    const options = {
-        pinataMetadata: {
-            name: fileName,
-        },
-        pinataOptions: {
-            cidVersion: 0
-        }
-    };
-    const res = await pinata.pinFileToIPFS(readableStreamForFile, options)
-    console.log(res)
-    return res
-}
-
-// * In case of Post article
-/*
-response:
-{
-    IpfsHash: This is the IPFS multi-hash provided back for your content,
-    PinSize: This is how large (in bytes) the content you just pinned is,
-    Timestamp: This is the timestamp for your content pinning (represented in ISO 8601 format)
-}
-*/
-async function AddContentToIpfs(articleContent, articleId) {
-    const body = {
-        content: articleContent
-    };
-    const options = {
-        pinataMetadata: {
-            name: `articleContent${articleId}`,
-        },
-        pinataOptions: {
-            cidVersion: 0
-        }
-    };
-    const res = await pinata.pinJSONToIPFS(body, options)
-    console.log(res)
-    return res
-}
-
-function UpdatePinFromIPFS(previousHash, newContent, articleId) {
-    DeletePinFromIPFS(previousHash);
-    const res = AddContentToIpfs(newContent, articleId);
-    //res.IpfsHash
-    //update the CID in the database with res.IpfsHash
-}
-
-// In case of a delete article 
-// response: 'OK'
-async function DeletePinFromIPFS(hashToUnpin) {
-    const res = await pinata.unpin(hashToUnpin)
-    console.log(res)
-}
-
-async function testPinataAuth() {
-    const res = await pinata.testAuthentication()
-    console.log(res)
-}
-
-const articleContent = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
-const newArticleContent = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Nec sagittis aliquam malesuada bibendum. Mauris rhoncus aenean vel elit. Justo eget magna fermentum iaculis eu non diam phasellus vestibulum. Sem integer vitae justo eget magna fermentum iaculis eu non. Nunc aliquet bibendum enim facilisis gravida neque convallis a cras. Aliquam purus sit amet luctus venenatis. Bibendum neque egestas congue quisque egestas diam in arcu. Ornare arcu dui vivamus arcu felis bibendum ut tristique. Ultrices sagittis orci a scelerisque purus semper eget. Duis tristique sollicitudin nibh sit amet commodo nulla. Ultrices mi tempus imperdiet nulla. Elementum tempus egestas sed sed risus pretium quam vulputate. Sit amet consectetur adipiscing elit ut aliquam purus. A arcu cursus vitae congue. Pellentesque habitant morbi tristique senectus et netus et.";
-
-async function App() {
-    // await testPinataAuth();
-
-    // await AddAndPinFileToIPFS('./data/articles.json', "articles.json");
-
-    // await AddContentToIpfs(articleContent, 1);
-
-    // await UpdatePinFromIPFS("QmSZE7dNRiTSfZpgTCp69DpkQBGqpijMwwSoPKh9qEHPsW", newArticleContent, 1);
-
-    // await handleRequest("QmYmddzbQTktSj6ajQ5JQmQyNChKVzznpcKoZ2tGu6DdGh");
-
-    // await catFile("QmYmddzbQTktSj6ajQ5JQmQyNChKVzznpcKoZ2tGu6DdGh");
-
-    // await DeletePinFromIPFS("QmTY2V23DVdGG9nvGXpDxLUwkgW38tCKX63QzeTMc1Tooh");
-}
-
-App().then(() => {
-    console.log('App execution completed');
-}).catch((error) => {
-    console.error('Error during App execution:', error);
-});
+};
